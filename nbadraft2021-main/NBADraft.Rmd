@@ -1,0 +1,385 @@
+---
+title: "Predicting The 2021 NBA Draft"
+author: "Kankshat Patel"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    toc_collapsed: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, 
+                      message = F,
+                      warning = F,
+                      fig.align = 'center',
+                      fig.height = 4, 
+                      fig.width = 4)
+
+# libraries here
+library(pander)
+library(tidyverse)
+library(maps)
+library(modelr)
+library(ROCR)
+library(randomForest)
+library(tree)
+library(gbm)
+library(ggridges)
+library(NbClust)
+library(readr)
+library(DT)
+```
+
+---
+
+# Introduction
+
+The main goal of this project was to use preexisting data from previous NBA draft classes as a way to predict which NCAA college basketball players would be drafted in the 2021 NBA Draft based on their college statistics.  As a disclaimer, there are quite a few contingencies to this project that will be explained in further depth throughout the writeup.  Though this type of project has done quite a few times over the years across all different sports, I thought that it would be good practice for me in developing models especially due to the difficulty of predicting something like an NBA Draft where only 60 players out of the many thousands of college players get drafted to play in the most competitive basketball league in the world.
+
+In terms of my processes, I used various machine learning algorithms that I learned in my recent machine learning class as a way to choose a model that would best predict the outcome of the draft.  Some of the models that I used include logistic regression, discriminant analysis, and random forest models.  The plan was to use college statistics as a way to predict who would get drafted.  For this project I decided to use the 2018-2019 NCAA season statistics as well as the 2019 draft in order to build my models due to the fact that this was the last normal college season before the COVID-19 pandemic where much of the following season was cut short.  
+
+As context, it is extremely difficult to be drafted to the NBA even after playing division 1 basketball in college.  According to [this website](https://www.ncaa.org/about/resources/research/mens-basketball-probability-competing-beyond-high-school), only 3.5% of all high school players become NCAA players.  This leaves 18,816 total NCAA participants.  Slimming the numbers down even further, only 1% of all high school players play at a Division 1 level of NCAA basketball.  Furthermore, in 2019 only 4181 of the 18,816 NCAA players were even eligible for the NBA draft which selects a total of 60 players, not all of which come from NCAA basketball.  So out of the 4181 draft eligible NCAA players, only 52 were drafted leaving us with a 1.2% NCAA to NBA percentage.
+
+*******
+
+# Datasets
+
+The first major contingency that we come across while planning this project is the fact that not every player that gets drafted to the NBA plays NCAA basketball.  There are several players that get drafted each year that come from outside the United States.  In the 2019 draft, 7 were drafted as international players.  On average since 2009, 11 international players have been drafted each year.  However, for the sake of this project and convenience for myself, I will only be considering NCAA basketball players as the point of this project is to be able to predict who gets drafted from the NCAA based on their stats.
+
+The second contingency that we come across is the fact that it would be way too difficult for me to compile a dataset of every single NCAA player and their statistics from the 2018-2019 season as there were over 18,000 NCAA participants that year.  As a way to solve this issue, I slimmed down the dataset to only Division 1 participants as 4.2% of all draft eligible Division 1 players were chosen in that year's draft.  Furthermore, I cut the data even further down to only players from the five D1 conferences with autonomous governance.  As a way to explain the conferences with autonomous governance, these five conferences only make up 18% of all D1 colleges but have nearly 40% of the voting power as well as the fact that they have the most wealthy programs.  Even with only Division 1 players, the dataset was still too large.  Cutting it down to the 5 conferences with autonomous governance meant restricting the data to only players from the ACC, Big Ten, Big 12, Pac-12, and SEC.  This helps a lot as 18% of draft eligible players from these conferences were drafted in the 2019 NBA Draft.  41 of the 60 draft spots were occupied by a player from one of these five Division 1 conferences.  My final dataset contains 901 players with 40 of them labeled as drafted to the NBA.  It would be 41 but Dewan Hernandez who was drafted to the NBA out of a top 5 conference with autonomous governance, took a gap year before entering the draft.  Therefore, he did not have any statistics from the 2018-2019 season.  
+
+The third contingency from the data is that I could not find a list of the players who were draft eligible so I ended up using all the players from the 5 conferences with autonomous governance.  The models probably would have been better had I used only draft eligible players' statistics.
+
+Lastly, I have come to the realization that many of the players that are likely to be drafted in this year's NBA draft did not play college basketball this past year as many of them participated in the NBA's G-League Development League which allows them to bypass the process of playing NCAA basketball.
+
+The stats that I am using to predict whether a player will get drafted or not include:
+
+- Games Played
+- Minutes Per Game
+- Field Goal Makes
+- Field Goal Attempts
+- Field Goal Percentage
+- 3 Point Makes
+- 3 Point Attempts
+- 3 Point Percentage
+- Free Throw Makes
+- Free Throw Attempts
+- Free Throw Percentage
+- Turn Overs Per Game
+- Personal Fouls Per Game
+- Offensive Rebounds Per Game
+- Defensive Rebounds Per Game
+- Rebounds Per Game
+- Assists Per Game
+- Steals Per Game
+- Blocks Per Game
+- Points Per Game
+
+Below contains a clip of the dataset before cleaning.
+```{r, include=TRUE, echo=F}
+data1 <- read_csv("NCAA D1 Autonomous - Sheet2.csv")
+
+data2 = data1 %>% 
+  select(-Player, -Team)
+
+data2 = data2 %>% 
+  rename(
+    FG_PER = "FG%",
+    "Three_P_PER" = "3P%",
+    "Three_P_A" = "3PA",
+    "FT_PER" = "FT%"
+  )
+
+data2$DRAFT = as.factor(data2$DRAFT)
+
+data1[1:5, 1:8] %>% 
+  pander()
+```
+
+After this, I cleaned the data by removing the name column as well as the team column, and renamed some of the columns to a better format.  An example is shown below.
+
+```{r, echo=F}
+data2[1:5, 1:8] %>% 
+  pander()
+```
+
+*******
+
+# Methods
+
+As for methods, the goal was to use different classification methods and decide which one would be most effective in determining which players from the top 5 conferences would get drafted.  I would then use the chosen model on 2020-2021 players statistics as a way to see who will get drafted to the NBA on July 29, 2021 which is the date of this year's draft.  As stated before, the three methods that I will be using are logistic regression, linear discriminant analysis, and a random forest model.  In addition, for all three classification models, I used a 40-60 test/train split.  This means that 60% of my original dataset was used as a training set to build the model and 40% of the dataset was used to test the models' accuracy.
+
+*******
+
+## Logistic Regression
+
+The first model that I attempted was a simple logistic regression with a threshold of 0.5.  As seen below, the true negative rate for this model is almost 98% while the true positive rate is around 53%.  While the total accuracy is over 96%, only 53% of the players in the test dataset that were drafted were classified by the model as "drafted."  There were 15 players in the test dataset that were drafted into the NBA and the model only classified 8 of them as drafted.
+
+```{r, include=F}
+# logistic regression
+set.seed(1089)
+
+merged_data_part = resample_partition(data = data2, p = c(test = 0.40, train = 0.60))
+train = as.data.frame(merged_data_part$train)
+test = as.data.frame(merged_data_part$test)
+
+mod_glm = glm(DRAFT ~ ., family = "binomial", data = train)
+summary(mod_glm)
+
+p_hat_glm = predict(mod_glm, test, type = 'response')
+
+y_hat_glm = factor(p_hat_glm > 0.5, labels = c(0, 1))
+```
+
+```{r, echo=FALSE}
+error_glm = table(test$DRAFT, y_hat_glm)
+error_glm / rowSums(error_glm)
+error_glm
+mean(test$DRAFT == y_hat_glm) 
+```
+
+I then attempted to adjust this logistic regression model by finding the optimal threshold as a way to increase the true positive rate. 
+
+```{r, include=FALSE}
+# store training labels for use in constructing ROC
+predictions_glm = prediction(predictions = p_hat_glm,
+                             labels = test$DRAFT)
+
+# compute predictions and performance metrics
+perf_glm = performance(prediction.obj = predictions_glm, "tpr", "fpr")
+
+# convert tpr and fpr to data frame and calculate youden statistic
+rates_glm = tibble(fpr = perf_glm@x.values,
+                   tpr = perf_glm@y.values,
+                   thresh = perf_glm@alpha.values)
+rates_glm = rates_glm %>%
+  unnest() %>%
+  mutate(youden = tpr - fpr)
+
+# select optimal threshold
+optimal_thresh = rates_glm %>%
+  slice_max(youden)
+```
+
+Below shows the optimal threshold as well as an ROC curve for this optimal threshold.
+
+```{r, include=TRUE}
+optimal_thresh
+
+y_hat_glm1 = factor(p_hat_glm > optimal_thresh$thresh, labels = c(0, 1))
+```
+
+```{r, include=TRUE}
+rates_glm %>%
+  ggplot(aes(x = fpr, y= tpr)) +
+  geom_line() +
+  geom_point(data = optimal_thresh, aes(x = fpr, y = tpr), color = "red", size = 2)
+```
+
+This model is a lot better in my opinion.  As seen below, the true negative rate as well as the total accuracy rate fell by a couple percentage points but the true positive rate rose drastically to 80%.  This model does a much better job of identifying which players would get drafted to the NBA.  Out of the 15 players in the test dataset that were drafted to the NBA, the model correctly classified 12 of them as drafted.
+
+```{r, include=TRUE}
+error_glm1 = table(test$DRAFT, y_hat_glm1)
+error_glm1 / rowSums(error_glm1)
+error_glm1
+mean(test$DRAFT == y_hat_glm1)
+```
+
+*******
+
+## LDA
+
+The next classification method that I decided to implement was a linear discriminant analysis using the default threshold.  After doing so, I was able to find that the model has an overall accuracy rate of a little over 94% and a true negative rate of about 96.5%.  However, the downside of this model is that true positive rate is 40% as it only accurately classifies 6 of the 15 players that were drafted to the NBA in 2019.  Therefore, this model is probably not an efficient one to use as our final model.
+
+```{r, include=TRUE}
+# LDA
+lda_fit = MASS::lda(DRAFT ~ ., data = train, method = "mle")
+
+lda_preds = predict(lda_fit, test)
+
+errors_lda = table(test$DRAFT, lda_preds$class)
+errors_lda / rowSums(errors_lda)
+errors_lda
+mean(test$DRAFT == lda_preds$class)
+```
+
+Just as I did with the logistic regression, I redid the model after finding an optimal threshold for linear discriminant analysis model.  In this case, the optimal threshold was extremely small as it is close to zero.  Below also shows an ROC curve for the optimal threshold.
+
+```{r, include=TRUE}
+# compute estimated probabilities on the test partition
+predictions_lda = prediction(predictions = lda_preds$posterior[, 2],
+                             labels = test$DRAFT)
+
+# compute predictions and performance metrics
+perf_lda = performance(prediction.obj = predictions_lda, "tpr", "fpr")
+
+# convert tpr and fpr to data frame and calculate youden statistic
+rates_lda = tibble(fpr = perf_lda@x.values,
+                   tpr = perf_lda@y.values,
+                   thresh = perf_lda@alpha.values)
+rates_lda = rates_lda %>%
+  unnest() %>%
+  mutate(youden = tpr - fpr)
+
+# select optimal threshold
+optimal_thresh_lda = rates_lda %>%
+  slice_max(youden)
+optimal_thresh_lda
+
+# plot
+rates_lda %>%
+  ggplot(aes(x = fpr, y = tpr)) +
+  geom_line() +
+  geom_point(data = optimal_thresh_lda, aes(x = fpr, y = tpr), color = "red", size = 2)
+```
+
+Using this optimal threshold, I redid the linear discriminant analysis model and found that its overall accuracy rate is only about 80% and the true negative rate is about 79%.  However, with this drastic decrease in accuracy rates, the true positive rate jumped all they way to 93% as it correctly classified 14 out of the 15 drafted players.  Looking at the counts though, we are able to see that the model incorrectly classified 72 players as "drafted" who were not drafted.  Therefore, we can determine that this model is not viable.  Even though we have a high true positive rate, the model severely overestimates the number of players that get drafted.
+
+```{r, include=TRUE}
+# convert to classes using optimal probability threshold
+lda_preds_adj = factor(lda_preds$posterior[, 2] > optimal_thresh_lda$thresh,
+                       labels = c("0", "1"))
+
+# cross-tabulate with true labels
+errors_lda_adj = table(test$DRAFT, lda_preds_adj)
+errors_lda_adj / rowSums(errors_lda_adj)
+errors_lda_adj
+mean(test$DRAFT == lda_preds_adj)
+```
+
+*******
+
+## Random Forest
+
+The last classification model that I decided to implement for this project was a random forest model.  After building the model, I created an importance table as a way to determine which variables were the most important in terms of dividing the tree.  As seen below, PPG, FGM, FTM, MPG, and FGA were the most important variables in terms of splitting the trees.
+
+```{r, include=FALSE}
+# classification models: random forest
+fit_rf = randomForest(DRAFT ~ ., data = train, ntree = 100, mtry = 5, importance = T)
+summary(fit_rf)
+fit_rf$type
+
+fit_rf
+```
+
+```{r, include=T}
+table = as.data.frame(fit_rf$importance) %>% 
+  arrange(-MeanDecreaseAccuracy)
+table[1:5,] %>% 
+  pander() 
+```
+
+Looking at the tables for misclassification rates for the random forest model below, we are able to see that the model has a true negative rate of over 97% and an overall accuracy rate of 94.4%.  However, like many of the other models, the true positive rate is 20% as only 3 of the 15 drafted players were correctly classified.
+
+```{r, include=TRUE}
+pred_rf = predict(fit_rf, test, type = "response")
+
+error_test_rf = table(test$DRAFT, pred_rf)
+error_test_rf / rowSums(error_test_rf)
+error_test_rf
+mean(test$DRAFT == pred_rf)
+```
+
+*******
+
+# Results
+
+In terms of deciding which model to utilize in order to predict the 2021 NBA draft, we run into the classic issue of give-and-take when it comes to overall accuracy and true positive accuracy.  In the end, I decided to use the logistic regression model with the optimal threshold as it yielded the results that I felt were best for this project.  This specific model allowed me to have both a relatively high overall prediction accuracy while keeping the true positive rate relatively high as well.  Having an 80% true positive rate in my opinion is pretty good considering just how few players get drafted to the NBA out of all the players within the dataset.  
+
+In order to use this model to predict the 2021 NBA draft, I had to pull the statistics for every player in the top 5 conferences with autonomous governance from the 2020-2021 season.  In the end, the new test dataset for this year's college players ended up with 982 players.  I then ran the model on this new dataset and the model predicts that the 37 players listed below will be drafted in the 2021 NBA draft.
+
+```{r}
+data3 <- read_csv("NCAA D1 Autonomous - Sheet3.csv")
+
+data4 = data3 %>% 
+  select(-Player, -Team)
+
+data4 = data4 %>% 
+  rename(
+    FG_PER = "FG%",
+    "Three_P_PER" = "3P%",
+    "Three_P_A" = "3PA",
+    "FT_PER" = "FT%"
+  )
+
+p_hat_glm_final = predict(mod_glm, data4, type = 'response')
+
+y_hat_glm_final = factor(p_hat_glm_final > optimal_thresh$thresh, labels = c(0, 1))
+
+data3$DRAFT = y_hat_glm_final
+
+data5 = data3 %>% 
+  filter(DRAFT == 1)
+
+data5 = data5 %>% 
+  rename(
+    FG_PER = "FG%",
+    "Three_P_PER" = "3P%",
+    "Three_P_A" = "3PA",
+    "FT_PER" = "FT%"
+  )
+
+data5 = data5 %>% 
+  select(Player, Team, GP, MPG, FG_PER, Three_P_PER, RPG, APG, SPG, BPG, PPG)
+data5$DRAFT = c(0,0,0,0,0,0,0,0,1,1,0,0,0,0,1,0,0,1,1,0,1,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0)
+
+datatable(data5) %>% formatStyle(
+  'DRAFT', target = 'row', 
+  backgroundColor = styleEqual(c(1), c('yellow'))
+)
+
+data5 %>% 
+  group_by(DRAFT) %>% 
+  count()
+
+8/37
+```
+
+
+*******
+
+# Discussion
+
+There are many things to keep in mind when viewing this project due to the number of contingencies that allowed the project to be easier for me to perform.  Much of this should be taken with a grain of salt.  To recap, the results of this project relies on the understanding that:
+
+1. The players predicted to be drafted must have played in the most recent NCAA basketball season and are not currently in the G-League.
+2. The players predicted to be drafted must have played Division 1 basketball in the most recent NCAA basketball season.
+3. The players predicted to be drafted must have played in one of the 5 conferences with autonomous governance (ACC, Big 10, Big 12, Pac-12, SEC)
+4. Not all the players in my dataset are draft-eligible.
+5. Players predicted to be drafted may have not even entered the draft.
+
+I was taking a closer look at the 37 players who are predicted to be drafted by my model and there seems to be some level of accuracy to it as Cade Cunningham and Evan Mobley are both on this list and are projected to be top 5 picks in the 2021 NBA draft by ESPN.  However, as stated before, there are players on this list that are not even entered in the draft such as Johnny Juzang who already stated that he will be returning to UCLA to play another season.  Also as stated before, this project would probably have been more accurate had I been looking solely at players who were draft-eligible instead of every single player within the top 5 conferences with autonomous governance.
+
+Overall, this was a fun project to perform as a way to test my skills even though the results may not be completely accurate.  I will be revisiting this project after July 29th which is the day of the draft in order to see how accurate my model was in predicting who would be drafted in the 2021 NBA Draft.
+
+Edit (Post July 29, 2021):
+
+Though it has been awhile, I have finally gotten around to looking at the results of my model.  After comparing the players that I predicted to get drafted to the players who actually got drafted in the 2021 NBA Draft, I realize that my model did not perform too well.  Out of the 37 players that my model predicted to be drafted, only 8 of them were actually drafted leaving us with a 21.6% accuracy rate which is not too high.  With that being said, there 10 players who I predicted to be drafted who went undrafted but eventually signed with NBA G-League teams or are currently on an NBA roster.  Overall, though my model did not perform as well as I would have liked it to, I still believe it performed to the best of its ability considering all the contingencies surrounding this project.  Many of the players that I predicted to be drafted actually ended up not even entering the draft and stayed at their respective schools.  In the datatable above, I have highlighted the players that were officially drafted by NBA teams in the 2021 draft.
+
+*******
+
+# References
+
+- https://www.basketball-reference.com/draft/NBA_2019.html
+- https://www.insidehighered.com/news/2014/08/08/ncaa-adopts-structure-giving-autonomy-richest-division-i-leagues-votes-college
+- https://www.ncaa.org/about/resources/research/mens-basketball-probability-competing-beyond-high-school
+- https://basketball.realgm.com/ncaa/conferences/Southeastern-Conference/8/stats/2021/Averages/All/All/Season/All/points/desc/1/
+- https://en.wikipedia.org/wiki/Power_Five_conferences
+- https://www.espn.com/nba/draft/bestavailable/_/position/ovr/page/1
+
+*******
+
+# Appendix
+```{r appendix, ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+```
+
+<center>
+```{r, echo=FALSE}
+#fa("globe", size = 5, color="green")
+```
+</center>
+
+<div class="tocify-extend-page" data-unique="tocify-extend-page" style="height: 0;"></div>
